@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const QRCode = require('qrcode');
 const pino = require('pino');
 
@@ -19,6 +19,82 @@ const supabase = createClient(
 // Armazena sessões ativas em memória
 const sessions = {};
 
+// ─── Persistência de sessão no Supabase ──────────────────────────────────────
+
+async function carregarSessaoDoSupabase(psicologoId) {
+  const { data } = await supabase
+    .from('whatsapp_sessions')
+    .select('session_data')
+    .eq('psicologo_id', psicologoId)
+    .single();
+  return data?.session_data ?? null;
+}
+
+async function salvarSessaoNoSupabase(psicologoId, sessionData) {
+  await supabase
+    .from('whatsapp_sessions')
+    .upsert({
+      psicologo_id: psicologoId,
+      session_data: sessionData,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'psicologo_id' });
+}
+
+async function criarAuthState(psicologoId) {
+  const { initAuthCreds, BufferJSON, proto } = require('@whiskeysockets/baileys');
+
+  const dadosSalvos = await carregarSessaoDoSupabase(psicologoId);
+
+  let creds = dadosSalvos?.creds
+    ? JSON.parse(JSON.stringify(dadosSalvos.creds), BufferJSON.reviver)
+    : initAuthCreds();
+
+  let keys = dadosSalvos?.keys ?? {};
+
+  const state = {
+    creds,
+    keys: {
+      get: async (type, ids) => {
+        const data = {};
+        for (const id of ids) {
+          let value = keys[`${type}-${id}`];
+          if (type === 'app-state-sync-key' && value) {
+            value = proto.Message.AppStateSyncKeyData.fromObject(value);
+          }
+          data[id] = value;
+        }
+        return data;
+      },
+      set: async (data) => {
+        for (const category of Object.keys(data)) {
+          for (const id of Object.keys(data[category])) {
+            const value = data[category][id];
+            const key = `${category}-${id}`;
+            if (value) {
+              keys[key] = value;
+            } else {
+              delete keys[key];
+            }
+          }
+        }
+        await salvarSessaoNoSupabase(psicologoId, {
+          creds: JSON.parse(JSON.stringify(creds, BufferJSON.replacer)),
+          keys,
+        });
+      },
+    },
+  };
+
+  const saveCreds = async () => {
+    await salvarSessaoNoSupabase(psicologoId, {
+      creds: JSON.parse(JSON.stringify(creds, BufferJSON.replacer)),
+      keys,
+    });
+  };
+
+  return { state, saveCreds };
+}
+
 // Middleware de autenticação
 function auth(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
@@ -30,7 +106,7 @@ function auth(req, res, next) {
 
 // Inicia ou reconecta uma sessão WhatsApp
 async function iniciarSessao(psicologoId) {
-  const { state, saveCreds } = await useMultiFileAuthState(`sessions/${psicologoId}`);
+  const { state, saveCreds } = await criarAuthState(psicologoId);
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
@@ -170,6 +246,11 @@ app.post('/disconnect', auth, async (req, res) => {
   await supabase
     .from('configuracoes_perfil')
     .update({ whatsapp_conectado: false })
+    .eq('psicologo_id', psicologo_id);
+
+  await supabase
+    .from('whatsapp_sessions')
+    .delete()
     .eq('psicologo_id', psicologo_id);
 
   res.json({ success: true });
