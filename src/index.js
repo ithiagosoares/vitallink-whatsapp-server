@@ -181,7 +181,7 @@ async function reconectarSessoes() {
 
 // Health check (mantém o Render acordado)
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', sessions: Object.keys(sessions).length });
+  res.json({ ok: true });
 });
 
 // Gera QR Code para conectar
