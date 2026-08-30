@@ -157,6 +157,14 @@ async function iniciarSessao(psicologoId) {
           .from('configuracoes_perfil')
           .update({ whatsapp_conectado: false })
           .eq('psicologo_id', psicologoId);
+
+        // Limpa credenciais inválidas — sem isso, a próxima tentativa de
+        // reconexão trava (408) porque o Baileys tenta reusar uma sessão
+        // que o WhatsApp já revogou do lado dele.
+        await supabase
+          .from('whatsapp_sessions')
+          .delete()
+          .eq('psicologo_id', psicologoId);
       }
     }
   });
