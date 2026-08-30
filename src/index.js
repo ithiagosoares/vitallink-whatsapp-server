@@ -147,7 +147,7 @@ async function iniciarSessao(psicologoId) {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
 
       if (shouldReconnect) {
-        console.log(`[${psicologoId}] Reconectando...`);
+        console.log(`[${psicologoId}] Reconectando... Motivo:`, JSON.stringify(lastDisconnect?.error?.output?.payload || lastDisconnect?.error?.message || lastDisconnect?.error));
         setTimeout(() => iniciarSessao(psicologoId), 5000);
       } else {
         console.log(`[${psicologoId}] Desconectado pelo usuário.`);
